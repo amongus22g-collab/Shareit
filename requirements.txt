@@ -1,0 +1,8 @@
+Flask
+Flask-Login
+Flask-Cors
+pyngrok
+pyqrcode
+pypng
+werkzeug
+gunicorn
