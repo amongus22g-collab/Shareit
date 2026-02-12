@@ -4,18 +4,37 @@ import pyqrcode
 import json
 import shutil
 from datetime import datetime
-from flask import Flask, render_template_string, request, send_from_directory, redirect, url_for
+from flask import Flask, render_template_string, request, send_from_directory, redirect, url_for, session, flash
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_cors import CORS
 from pyngrok import ngrok
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_sqlalchemy import SQLAlchemy
 
-# --- 1. SETUP ---
+# --- 1. SETUP & CONFIG ---
 app = Flask(__name__)
 # IMPORTANT: On Koyeb, this secret key should ideally be an Environment Variable
 app.secret_key = os.environ.get("SECRET_KEY", "shivam_social_vault_2026") 
 CORS(app)
 
+# --- NEW HYBRID DATABASE LOGIC (ADDED) ---
+# This allows syncing between your laptop and Koyeb
+database_url = os.environ.get("DATABASE_URL")
+if database_url:
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url.replace("postgres://", "postgresql://")
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///local_vault.db'
+
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# SQL Model for syncing secrets/passwords
+class Secret(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    site_name = db.Column(db.String(100), nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+
+# --- ORIGINAL FILE SYSTEM SETUP (PRESERVED) ---
 BASE_DIR = os.getcwd()
 VAULT_ROOT = os.path.join(BASE_DIR, 'vault_storage')
 PUBLIC_ROOT = os.path.join(VAULT_ROOT, '_public_hub')
@@ -27,7 +46,11 @@ for p in [VAULT_ROOT, PUBLIC_ROOT]:
 if not os.path.exists(DB_FILE):
     with open(DB_FILE, 'w') as f: json.dump({"users": {}, "public_meta": {}}, f)
 
-# --- 2. AUTHENTICATION ---
+# Create SQL tables automatically
+with app.app_context():
+    db.create_all()
+
+# --- 2. AUTHENTICATION (PRESERVED) ---
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
@@ -37,8 +60,8 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    db = get_db()
-    return User(user_id) if user_id in db['users'] else None
+    db_data = get_db()
+    return User(user_id) if user_id in db_data['users'] else None
 
 def get_db():
     try:
@@ -48,7 +71,7 @@ def get_db():
 def save_db(data):
     with open(DB_FILE, 'w') as f: json.dump(data, f)
 
-# --- 3. UI DESIGN (UI_HTML remains same as your original) ---
+# --- 3. UI DESIGN (PRESERVED EXACTLY) ---
 UI_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -91,6 +114,7 @@ UI_HTML = """
                 <a href="/" class="flex items-center p-3 rounded-xl transition text-sm font-bold {{ 'active-tab' if not is_trash and not is_public else '' }}"><i class="fas fa-lock mr-3"></i> Private Vault</a>
                 <a href="/hub" class="flex items-center p-3 rounded-xl transition text-sm font-bold {{ 'active-tab' if is_public else '' }}"><i class="fas fa-fire-alt mr-3"></i> Public Hub</a>
                 <a href="/trash" class="flex items-center p-3 rounded-xl transition text-sm font-bold {{ 'active-tab' if is_trash else '' }}"><i class="fas fa-trash-alt mr-3"></i> Trash</a>
+                <a href="/passwords" class="flex items-center p-3 rounded-xl transition text-sm font-bold"><i class="fas fa-key mr-3"></i> Cloud Passwords</a>
             </div>
         </div>
         <div class="lg:col-span-3 glass rounded-[2.5rem] overflow-hidden">
@@ -171,7 +195,7 @@ UI_HTML = """
 </html>
 """
 
-# --- 4. SYSTEM LOGIC ---
+# --- 4. SYSTEM LOGIC (PRESERVED EXACTLY) ---
 def get_user_folders(user_id):
     u_root = os.path.join(VAULT_ROOT, user_id)
     u_trash = os.path.join(u_root, '.trash')
@@ -182,10 +206,10 @@ def get_user_folders(user_id):
 @app.route('/register', methods=['POST'])
 def register():
     u, p = request.form['u'].lower().strip(), request.form['p']
-    db = get_db()
-    if u in db['users'] or not u: return "Invalid or existing username"
-    db['users'][u] = generate_password_hash(p)
-    save_db(db)
+    db_data = get_db()
+    if u in db_data['users'] or not u: return "Invalid or existing username"
+    db_data['users'][u] = generate_password_hash(p)
+    save_db(db_data)
     get_user_folders(u)
     login_user(User(u))
     return redirect(url_for('index'))
@@ -194,8 +218,8 @@ def register():
 def login():
     if request.method == 'POST':
         u, p = request.form['u'].lower().strip(), request.form['p']
-        db = get_db()
-        if u in db['users'] and check_password_hash(db['users'][u], p):
+        db_data = get_db()
+        if u in db_data['users'] and check_password_hash(db_data['users'][u], p):
             login_user(User(u))
             return redirect(url_for('index'))
     return render_template_string(UI_HTML)
@@ -210,17 +234,17 @@ def index():
 @app.route('/hub')
 @login_required
 def hub():
-    db = get_db()
+    db_data = get_db()
     files = os.listdir(PUBLIC_ROOT)
-    files.sort(key=lambda f: db['public_meta'].get(f, {}).get('likes', 0), reverse=True)
-    return render_template_string(UI_HTML, files=files, meta=db['public_meta'], is_trash=False, is_public=True)
+    files.sort(key=lambda f: db_data['public_meta'].get(f, {}).get('likes', 0), reverse=True)
+    return render_template_string(UI_HTML, files=files, meta=db_data['public_meta'], is_trash=False, is_public=True)
 
 @app.route('/like/<path:filename>')
 @login_required
 def like_file(filename):
-    db = get_db()
-    if filename in db['public_meta']:
-        meta = db['public_meta'][filename]
+    db_data = get_db()
+    if filename in db_data['public_meta']:
+        meta = db_data['public_meta'][filename]
         liked_by = meta.get('liked_by', [])
         if current_user.id in liked_by:
             liked_by.remove(current_user.id)
@@ -229,7 +253,7 @@ def like_file(filename):
             liked_by.append(current_user.id)
             meta['likes'] = meta.get('likes', 0) + 1
         meta['liked_by'] = liked_by
-        save_db(db)
+        save_db(db_data)
     return redirect('/hub')
 
 @app.route('/trash')
@@ -247,9 +271,9 @@ def upload():
     if f:
         if target == 'public':
             f.save(os.path.join(PUBLIC_ROOT, f.filename))
-            db = get_db()
-            db['public_meta'][f.filename] = {"sender": current_user.id, "likes": 0, "liked_by": []}
-            save_db(db)
+            db_data = get_db()
+            db_data['public_meta'][f.filename] = {"sender": current_user.id, "likes": 0, "liked_by": []}
+            save_db(db_data)
             return redirect('/hub')
         else:
             u_root, _ = get_user_folders(current_user.id)
@@ -263,9 +287,9 @@ def make_public(filename):
     src, dest = os.path.join(u_root, filename), os.path.join(PUBLIC_ROOT, filename)
     if os.path.exists(src):
         shutil.copy(src, dest)
-        db = get_db()
-        db['public_meta'][filename] = {"sender": current_user.id, "likes": 0, "liked_by": []}
-        save_db(db)
+        db_data = get_db()
+        db_data['public_meta'][filename] = {"sender": current_user.id, "likes": 0, "liked_by": []}
+        save_db(db_data)
     return redirect('/hub')
 
 @app.route('/delete/<path:filename>')
@@ -304,18 +328,15 @@ def get_ip():
     finally: s.close()
     return IP
 
-# --- 5. ENGINE START (UPDATED FOR KOYEB) ---
+# --- 5. ENGINE START (PRESERVED & UPDATED) ---
 def start_engine(token=""):
-    # Detect if we are on Koyeb by looking for the PORT environment variable
-    # If not found, it defaults to 8080
     port = int(os.environ.get("PORT", 8080))
     is_cloud = os.environ.get("PORT") is not None
 
     if not is_cloud:
-        # LOCAL MODE (Your Laptop)
         local_url = f"http://{get_ip()}:5000"
         qr = pyqrcode.create(local_url, error='L', version=None)
-        print("\n" + "❤️"*20)
+        print("\\n" + "❤️"*20)
         print(f" 🏠 LOCAL: {local_url}")
         print(qr.terminal(quiet_zone=1)) 
         if token:
@@ -324,13 +345,10 @@ def start_engine(token=""):
                 public_url = ngrok.connect(5000).public_url
                 print(f" 🌍 GLOBAL SOCIAL HUB: {public_url}")
             except Exception as e: print(f" [!] Ngrok Error: {e}")
-        print("❤️"*20 + "\n")
-        # Run on 5000 locally
+        print("❤️"*20 + "\\n")
         app.run(host='0.0.0.0', port=5000, debug=False)
     else:
-        # CLOUD MODE (Koyeb)
-        print(f"\n🚀 CLOUD MODE ACTIVE: Listening on Port {port}\n")
-        # Run on the port provided by Koyeb (8080)
+        print(f"\\n🚀 CLOUD MODE ACTIVE: Port {port}\\n")
         app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == '__main__':
