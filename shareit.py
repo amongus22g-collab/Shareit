@@ -11,32 +11,32 @@ from pyngrok import ngrok
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 
-# --- 1. SETUP & HYBRID DATABASE ---
+# --- 1. SETUP & CLOUD DATABASE ---
 app = Flask(__name__)
-# Security: Uses Environment Variable on Koyeb, or a default locally
+# Secure secret key for Koyeb sessions
 app.secret_key = os.environ.get("SECRET_KEY", "shivam_social_vault_2026") 
 CORS(app)
 
 # Neon/Postgres Connection Logic
 database_url = os.environ.get("DATABASE_URL")
 if database_url:
-    # Koyeb/Heroku fix: SQLAlchemy requires 'postgresql://' instead of 'postgres://'
+    # Koyeb fix: SQLAlchemy needs 'postgresql://' instead of 'postgres://'
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url.replace("postgres://", "postgresql://")
 else:
-    # Use SQLite for local development on your laptop
+    # Use SQLite for local development
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///local_vault.db'
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# Database Model for syncing passwords/secrets to the Cloud (Neon)
+# Database Model for Neon Cloud Storage
 class Secret(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     site_name = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(200), nullable=False)
     owner_id = db.Column(db.String(100), nullable=False)
 
-# Automatically create tables in Neon on startup
+# Auto-create Neon tables on startup
 with app.app_context():
     db.create_all()
 
@@ -73,7 +73,7 @@ def get_db_json():
 def save_db_json(data):
     with open(DB_FILE, 'w') as f: json.dump(data, f)
 
-# --- 3. UI DESIGN ---
+# --- 3. UI DESIGN (FULL ORIGINAL UI) ---
 UI_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -177,15 +177,15 @@ UI_HTML = """
         <div class="glass p-12 rounded-[3.5rem] w-full max-w-sm shadow-2xl border border-white/5">
             <h2 class="text-3xl font-black text-center mb-8 tracking-tighter">SOCIAL<span class="text-blue-500">HUB</span></h2>
             <form method="POST" action="/login" class="space-y-4 mb-8">
-                <input type="text" name="u" placeholder="Username" required class="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-blue-500">
-                <input type="password" name="p" placeholder="Password" required class="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-blue-500">
+                <input type="text" name="u" placeholder="Username" required class="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-blue-500 text-white">
+                <input type="password" name="p" placeholder="Password" required class="w-full bg-slate-900 border border-slate-800 p-4 rounded-2xl outline-none focus:border-blue-500 text-white">
                 <button type="submit" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-blue-900/40">Open Vault</button>
             </form>
             <div class="pt-6 border-t border-white/5 text-center">
                 <p class="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">New here? Join us</p>
                 <form method="POST" action="/register" class="space-y-4">
-                    <input type="text" name="u" placeholder="New Username" required class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-emerald-500 text-xs">
-                    <input type="password" name="p" placeholder="New Password" required class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-emerald-500 text-xs">
+                    <input type="text" name="u" placeholder="New Username" required class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-emerald-500 text-xs text-white">
+                    <input type="password" name="p" placeholder="New Password" required class="w-full bg-slate-900 border border-slate-800 p-3 rounded-xl outline-none focus:border-emerald-500 text-xs text-white">
                     <button type="submit" class="w-full bg-emerald-600/10 text-emerald-500 border border-emerald-500/20 py-3 rounded-xl font-black text-[10px] uppercase">Sign Up</button>
                 </form>
             </div>
@@ -237,7 +237,6 @@ def index():
 def hub():
     db_data = get_db_json()
     files = os.listdir(PUBLIC_ROOT)
-    # Sort files by likes
     files.sort(key=lambda f: db_data['public_meta'].get(f, {}).get('likes', 0), reverse=True)
     return render_template_string(UI_HTML, files=files, meta=db_data['public_meta'], is_trash=False, is_public=True)
 
@@ -336,7 +335,7 @@ def start_engine(token=""):
     is_cloud = os.environ.get("PORT") is not None
 
     if not is_cloud:
-        # LOCAL MODE (Your Laptop)
+        # LOCAL MODE (QR Code)
         local_url = f"http://{get_ip()}:5000"
         qr = pyqrcode.create(local_url, error='L', version=None)
         print("\n" + "❤️"*20)
@@ -346,16 +345,15 @@ def start_engine(token=""):
             try:
                 ngrok.set_auth_token(token)
                 public_url = ngrok.connect(5000).public_url
-                print(f" 🌍 GLOBAL SOCIAL HUB: {public_url}")
+                print(f" 🌍 GLOBAL: {public_url}")
             except Exception as e: print(f" [!] Ngrok Error: {e}")
         print("❤️"*20 + "\n")
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=5000)
     else:
-        # CLOUD MODE (Koyeb/Neon)
+        # CLOUD MODE (Koyeb)
         print(f"\n🚀 CLOUD MODE ACTIVE: Listening on Port {port}\n")
-        app.run(host='0.0.0.0', port=port, debug=False)
+        app.run(host='0.0.0.0', port=port)
 
 if __name__ == '__main__':
-    # Your original Ngrok token
     MY_TOKEN = "39YXDnpRc0YeJOito0vhQrFSOCX_28ootyWn9kSpNiVKCSZ6Z"
     start_engine(token=MY_TOKEN)
